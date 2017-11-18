@@ -1,4 +1,4 @@
-FROM bluelens/bl-classify-base:latest
+FROM bluelens/python:3.6
 MAINTAINER bluehackmaster <master@bluehack.net>
 
 USER root
@@ -9,6 +9,6 @@ WORKDIR /usr/src/app
 
 COPY . /usr/src/app
 
-#RUN pip install -r requirements.txt
+RUN pip install -r requirements.txt
 
 CMD ["python", "main.py"]
