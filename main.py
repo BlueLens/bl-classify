@@ -4,14 +4,15 @@ import uuid
 import os
 from multiprocessing import Process
 
-import uuid
-import logging
 import redis
-import json
 import time
+import pickle
 from bluelens_spawning_pool import spawning_pool
 import stylelens_product
 from stylelens_product.rest import ApiException
+
+from bluelens_log import Logging
+
 
 HOST_URL = 'host_url'
 TAG = 'tag'
@@ -25,25 +26,30 @@ PRODUCT_NO = 'product_no'
 MAIN = 'main'
 NATION = 'nation'
 
-SPAWNING_CRITERIA = 10000
+SPAWNING_CRITERIA = 100
 
 REDIS_HOST_CRAWL_QUEUE = 'bl:host:crawl:queue'
 REDIS_PRODUCT_QUERY_QUEUE = 'bl:product:query:queue'
 REDIS_PRODUCT_CLASSIFY_BUFFER = 'bl:product:classify:buffer'
 REDIS_PRODUCT_CLASSIFY_QUEUE = 'bl:product:classify:queue'
+REDIS_PRODUCT_HASH = 'bl:product:hash'
 
 REDIS_SERVER = os.environ['REDIS_SERVER']
 REDIS_PASSWORD = os.environ['REDIS_PASSWORD']
 
+
 AWS_ACCESS_KEY = os.environ['AWS_ACCESS_KEY']
 AWS_SECRET_ACCESS_KEY = os.environ['AWS_SECRET_ACCESS_KEY']
 
-logging.basicConfig(filename='./log/main.log', level=logging.DEBUG)
 rconn = redis.StrictRedis(REDIS_SERVER, port=6379, password=REDIS_PASSWORD)
+options = {
+  'REDIS_SERVER': REDIS_SERVER,
+  'REDIS_PASSWORD': REDIS_PASSWORD
+}
+log = Logging(options, tag='bl-classify')
 
 def query(host_code):
-  print('start query: ' + host_code)
-  logging.debug(host_code)
+  log.info('start query: ' + host_code)
 
   product_api = stylelens_product.ProductApi()
 
@@ -52,18 +58,18 @@ def query(host_code):
     for p in res.data:
       push_product_to_queue(p)
   except ApiException as e:
-    print(e)
-    logging.error(e)
+    log.error(e)
 
 def push_product_to_queue(product):
-  rconn.lpush(REDIS_PRODUCT_CLASSIFY_BUFFER, product.to_str())
+  rconn.lpush(REDIS_PRODUCT_CLASSIFY_BUFFER, pickle.dumps(product.to_dict()))
+  rconn.hset(REDIS_PRODUCT_HASH, product.id, pickle.dumps(product.to_dict()))
 
 def spawn_classifier(uuid):
 
   pool = spawning_pool.SpawningPool()
 
   project_name = 'bl-classifier-' + uuid
-  print('spawn_classifier: ' + project_name)
+  log.debug('spawn_classifier: ' + project_name)
 
   pool.setServerUrl(REDIS_SERVER)
   pool.setServerPassword(REDIS_PASSWORD)
@@ -83,7 +89,7 @@ def spawn_classifier(uuid):
   pool.setContainerImage(container, 'bluelens/bl-classifier:latest')
   pool.addContainer(container)
   pool.setRestartPolicy('Never')
-  # pool.spawn()
+  pool.spawn()
 
 def dispatch_query_job(rconn):
   while True:
@@ -99,9 +105,10 @@ def dispatch_classifier(rconn):
     rconn.lpush(REDIS_PRODUCT_CLASSIFY_QUEUE, value)
     if i % SPAWNING_CRITERIA == 0:
       spawn_classifier(str(uuid.uuid4()))
-      time.sleep(60)
+      time.sleep(10)
     i = i + 1
 
 if __name__ == '__main__':
+  # dispatch_query_job(rconn)
   Process(target=dispatch_query_job, args=(rconn,)).start()
   Process(target=dispatch_classifier, args=(rconn,)).start()
