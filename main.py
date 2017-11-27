@@ -84,6 +84,7 @@ def spawn_classifier(uuid):
   pool.setMetadataName(project_name)
   pool.setMetadataNamespace('index')
   pool.addMetadataLabel('name', project_name)
+  pool.addMetadataLabel('group', 'bl-classifier')
   pool.addMetadataLabel('SPAWN_ID', uuid)
   container = pool.createContainer()
   pool.setContainerName(container, project_name)
