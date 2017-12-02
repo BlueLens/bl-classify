@@ -26,7 +26,7 @@ PRODUCT_NO = 'product_no'
 MAIN = 'main'
 NATION = 'nation'
 
-REDIS_HOST_CRAWL_QUEUE = 'bl:host:crawl:queue'
+REDIS_HOST_CLASSIFY_QUEUE = 'bl:host:classify:queue'
 REDIS_PRODUCT_QUERY_QUEUE = 'bl:product:query:queue'
 REDIS_PRODUCT_CLASSIFY_BUFFER = 'bl:product:classify:buffer'
 REDIS_PRODUCT_CLASSIFY_QUEUE = 'bl:product:classify:queue'
@@ -100,7 +100,7 @@ def spawn_classifier(uuid):
 
 def dispatch_query_job(rconn):
   while True:
-    key, value = rconn.blpop([REDIS_HOST_CRAWL_QUEUE])
+    key, value = rconn.blpop([REDIS_HOST_CLASSIFY_QUEUE])
     query(value.decode('utf-8'))
 
 def dispatch_classifier(rconn):
