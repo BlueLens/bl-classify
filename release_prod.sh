@@ -2,8 +2,8 @@
 
 export ORG="bluelens"
 export IMAGE="bl-classify"
-export TAG='latest'
-export NAMESPACE="index"
+export TAG='prod'
+export NAMESPACE="prod"
 
 docker login
 

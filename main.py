@@ -32,10 +32,14 @@ REDIS_PRODUCT_CLASSIFY_BUFFER = 'bl:product:classify:buffer'
 REDIS_PRODUCT_CLASSIFY_QUEUE = 'bl:product:classify:queue'
 REDIS_PRODUCT_IMAGE_PROCESS_QUEUE = 'bl:product:image:process:queue'
 # REDIS_PRODUCT_HASH = 'bl:product:hash'
+REDIS_CRAWL_VERSION = 'bl:crawl:version'
+REDIS_CRAWL_VERSION_LATEST = 'latest'
 
 REDIS_SERVER = os.environ['REDIS_SERVER']
 REDIS_PASSWORD = os.environ['REDIS_PASSWORD']
-
+RELEASE_MODE = os.environ['RELEASE_MODE']
+OD_HOST = os.environ['OD_HOST']
+OD_PORT = os.environ['OD_PORT']
 
 AWS_ACCESS_KEY = os.environ['AWS_ACCESS_KEY']
 AWS_SECRET_ACCESS_KEY = os.environ['AWS_SECRET_ACCESS_KEY']
@@ -47,9 +51,15 @@ options = {
 }
 log = Logging(options, tag='bl-classify')
 
+def get_latest_crawl_version():
+  value = rconn.hget(REDIS_CRAWL_VERSION, REDIS_CRAWL_VERSION_LATEST)
+  version_id = value.decode("utf-8")
+  return version_id
+
 def query(host_code):
   log.info('start query: ' + host_code)
 
+  version_id = get_latest_crawl_version()
   product_api = stylelens_product.ProductApi()
 
   q_offset = 0
@@ -57,13 +67,24 @@ def query(host_code):
 
   try:
     while True:
-      res = product_api.get_products_by_hostcode(host_code, offset=q_offset, limit=q_limit)
+      res = product_api.get_products_by_hostcode_and_version_id(host_code, version_id,
+                                                                is_indexed=False,
+                                                                offset=q_offset, limit=q_limit)
       for p in res.data:
         push_product_to_queue(p)
       if q_limit > len(res.data):
         break
       else:
         q_offset = q_offset + q_limit
+  except ApiException as e:
+    log.error(str(e) + ':' + host_code)
+
+def cleanup_products(host_code, version_id):
+  product_api = stylelens_product.ProductApi()
+  try:
+    res = product_api.delete_products_by_hostcode_and_version_id(host_code, version_id,
+                                                              except_version=True)
+    log.debug(res)
   except ApiException as e:
     log.error(e)
 
@@ -82,7 +103,7 @@ def spawn_classifier(uuid):
   pool.setApiVersion('v1')
   pool.setKind('Pod')
   pool.setMetadataName(project_name)
-  pool.setMetadataNamespace('index')
+  pool.setMetadataNamespace(RELEASE_MODE)
   pool.addMetadataLabel('name', project_name)
   pool.addMetadataLabel('group', 'bl-classifier')
   pool.addMetadataLabel('SPAWN_ID', uuid)
@@ -93,7 +114,10 @@ def spawn_classifier(uuid):
   pool.addContainerEnv(container, 'REDIS_SERVER', REDIS_SERVER)
   pool.addContainerEnv(container, 'REDIS_PASSWORD', REDIS_PASSWORD)
   pool.addContainerEnv(container, 'SPAWN_ID', uuid)
-  pool.setContainerImage(container, 'bluelens/bl-classifier:latest')
+  pool.addContainerEnv(container, 'RELEASE_MODE', RELEASE_MODE)
+  pool.addContainerEnv(container, 'OD_HOST', OD_HOST)
+  pool.addContainerEnv(container, 'OD_PORT', OD_PORT)
+  pool.setContainerImage(container, 'bluelens/bl-classifier:' + RELEASE_MODE)
   pool.addContainer(container)
   pool.setRestartPolicy('Never')
   pool.spawn()
@@ -109,9 +133,11 @@ def dispatch_classifier(rconn):
     len = rconn.llen(REDIS_PRODUCT_CLASSIFY_QUEUE)
     if len > 0:
       spawn_classifier(str(uuid.uuid4()))
-      time.sleep(60)
+    time.sleep(60)
 
 if __name__ == '__main__':
   # dispatch_query_job(rconn)
   Process(target=dispatch_query_job, args=(rconn,)).start()
   Process(target=dispatch_classifier, args=(rconn,)).start()
+
+  # query('HC0006')
