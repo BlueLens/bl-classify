@@ -46,6 +46,13 @@ DB_OBJECT_PORT = os.environ['DB_OBJECT_PORT']
 DB_OBJECT_NAME = os.environ['DB_OBJECT_NAME']
 DB_OBJECT_USER = os.environ['DB_OBJECT_USER']
 DB_OBJECT_PASSWORD = os.environ['DB_OBJECT_PASSWORD']
+
+DB_IMAGE_HOST = os.environ['DB_IMAGE_HOST']
+DB_IMAGE_PORT = os.environ['DB_IMAGE_PORT']
+DB_IMAGE_NAME = os.environ['DB_IMAGE_NAME']
+DB_IMAGE_USER = os.environ['DB_IMAGE_USER']
+DB_IMAGE_PASSWORD = os.environ['DB_IMAGE_PASSWORD']
+
 AWS_ACCESS_KEY = os.environ['AWS_ACCESS_KEY']
 AWS_SECRET_ACCESS_KEY = os.environ['AWS_SECRET_ACCESS_KEY']
 
@@ -127,6 +134,11 @@ def spawn_classifier(uuid):
   pool.addContainerEnv(container, 'DB_OBJECT_USER', DB_OBJECT_USER)
   pool.addContainerEnv(container, 'DB_OBJECT_PASSWORD', DB_OBJECT_PASSWORD)
   pool.addContainerEnv(container, 'DB_OBJECT_NAME', DB_OBJECT_NAME)
+  pool.addContainerEnv(container, 'DB_IMAGE_HOST', DB_IMAGE_HOST)
+  pool.addContainerEnv(container, 'DB_IMAGE_PORT', DB_IMAGE_PORT)
+  pool.addContainerEnv(container, 'DB_IMAGE_USER', DB_IMAGE_USER)
+  pool.addContainerEnv(container, 'DB_IMAGE_PASSWORD', DB_IMAGE_PASSWORD)
+  pool.addContainerEnv(container, 'DB_IMAGE_NAME', DB_IMAGE_NAME)
   pool.setContainerImage(container, 'bluelens/bl-object-classifier:' + RELEASE_MODE)
   pool.addContainer(container)
   pool.setRestartPolicy('Never')
