@@ -26,12 +26,13 @@ PRODUCT_NO = 'product_no'
 MAIN = 'main'
 NATION = 'nation'
 
+SPAWN_MAX = 100
+
 REDIS_HOST_CLASSIFY_QUEUE = 'bl:host:classify:queue'
 REDIS_PRODUCT_QUERY_QUEUE = 'bl:product:query:queue'
 REDIS_PRODUCT_CLASSIFY_BUFFER = 'bl:product:classify:buffer'
 REDIS_PRODUCT_CLASSIFY_QUEUE = 'bl:product:classify:queue'
 REDIS_PRODUCT_IMAGE_PROCESS_QUEUE = 'bl:product:image:process:queue'
-# REDIS_PRODUCT_HASH = 'bl:product:hash'
 REDIS_CRAWL_VERSION = 'bl:crawl:version'
 REDIS_CRAWL_VERSION_LATEST = 'latest'
 
@@ -40,7 +41,11 @@ REDIS_PASSWORD = os.environ['REDIS_PASSWORD']
 RELEASE_MODE = os.environ['RELEASE_MODE']
 OD_HOST = os.environ['OD_HOST']
 OD_PORT = os.environ['OD_PORT']
-
+DB_OBJECT_HOST = os.environ['DB_OBJECT_HOST']
+DB_OBJECT_PORT = os.environ['DB_OBJECT_PORT']
+DB_OBJECT_NAME = os.environ['DB_OBJECT_NAME']
+DB_OBJECT_USER = os.environ['DB_OBJECT_USER']
+DB_OBJECT_PASSWORD = os.environ['DB_OBJECT_PASSWORD']
 AWS_ACCESS_KEY = os.environ['AWS_ACCESS_KEY']
 AWS_SECRET_ACCESS_KEY = os.environ['AWS_SECRET_ACCESS_KEY']
 
@@ -95,7 +100,7 @@ def spawn_classifier(uuid):
 
   pool = spawning_pool.SpawningPool()
 
-  project_name = 'bl-classifier-' + uuid
+  project_name = 'bl-object-classifier-' + uuid
   log.debug('spawn_classifier: ' + project_name)
 
   pool.setServerUrl(REDIS_SERVER)
@@ -105,7 +110,7 @@ def spawn_classifier(uuid):
   pool.setMetadataName(project_name)
   pool.setMetadataNamespace(RELEASE_MODE)
   pool.addMetadataLabel('name', project_name)
-  pool.addMetadataLabel('group', 'bl-classifier')
+  pool.addMetadataLabel('group', 'bl-object-classifier')
   pool.addMetadataLabel('SPAWN_ID', uuid)
   container = pool.createContainer()
   pool.setContainerName(container, project_name)
@@ -117,7 +122,12 @@ def spawn_classifier(uuid):
   pool.addContainerEnv(container, 'RELEASE_MODE', RELEASE_MODE)
   pool.addContainerEnv(container, 'OD_HOST', OD_HOST)
   pool.addContainerEnv(container, 'OD_PORT', OD_PORT)
-  pool.setContainerImage(container, 'bluelens/bl-classifier:' + RELEASE_MODE)
+  pool.addContainerEnv(container, 'DB_OBJECT_HOST', DB_OBJECT_HOST)
+  pool.addContainerEnv(container, 'DB_OBJECT_PORT', DB_OBJECT_PORT)
+  pool.addContainerEnv(container, 'DB_OBJECT_USER', DB_OBJECT_USER)
+  pool.addContainerEnv(container, 'DB_OBJECT_PASSWORD', DB_OBJECT_PASSWORD)
+  pool.addContainerEnv(container, 'DB_OBJECT_NAME', DB_OBJECT_NAME)
+  pool.setContainerImage(container, 'bluelens/bl-object-classifier:' + RELEASE_MODE)
   pool.addContainer(container)
   pool.setRestartPolicy('Never')
   pool.spawn()
@@ -129,15 +139,17 @@ def dispatch_query_job(rconn):
 
 def dispatch_classifier(rconn):
 
+  count = 0
   while True:
     len = rconn.llen(REDIS_PRODUCT_CLASSIFY_QUEUE)
-    if len > 0:
+    if len > 0 and count < SPAWN_MAX:
       spawn_classifier(str(uuid.uuid4()))
-    time.sleep(60)
+      count = count + 1
+    time.sleep(60 + count * 10)
 
 if __name__ == '__main__':
-  # dispatch_query_job(rconn)
-  Process(target=dispatch_query_job, args=(rconn,)).start()
-  Process(target=dispatch_classifier, args=(rconn,)).start()
-
-  # query('HC0006')
+  try:
+    Process(target=dispatch_query_job, args=(rconn,)).start()
+    Process(target=dispatch_classifier, args=(rconn,)).start()
+  except Exception as e:
+    log.error(str(e))
