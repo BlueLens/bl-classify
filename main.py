@@ -8,8 +8,7 @@ import redis
 import time
 import pickle
 from bluelens_spawning_pool import spawning_pool
-import stylelens_product
-from stylelens_product.rest import ApiException
+from stylelens_product.products import Products
 
 from bluelens_log import Logging
 
@@ -26,7 +25,7 @@ PRODUCT_NO = 'product_no'
 MAIN = 'main'
 NATION = 'nation'
 
-SPAWN_MAX = 100
+SPAWN_MAX = 10
 
 REDIS_HOST_CLASSIFY_QUEUE = 'bl:host:classify:queue'
 REDIS_PRODUCT_QUERY_QUEUE = 'bl:product:query:queue'
@@ -63,16 +62,18 @@ options = {
 }
 log = Logging(options, tag='bl-classify')
 
+product_api = None
+
 def get_latest_crawl_version():
   value = rconn.hget(REDIS_CRAWL_VERSION, REDIS_CRAWL_VERSION_LATEST)
   version_id = value.decode("utf-8")
   return version_id
 
 def query(host_code):
+  global product_api
   log.info('start query: ' + host_code)
 
   version_id = get_latest_crawl_version()
-  product_api = stylelens_product.ProductApi()
 
   q_offset = 0
   q_limit = 100
@@ -80,28 +81,28 @@ def query(host_code):
   try:
     while True:
       res = product_api.get_products_by_hostcode_and_version_id(host_code, version_id,
-                                                                is_indexed=False,
+                                                                is_processed=False,
                                                                 offset=q_offset, limit=q_limit)
-      for p in res.data:
+      for p in res:
         push_product_to_queue(p)
-      if q_limit > len(res.data):
+      if q_limit > len(res):
         break
       else:
         q_offset = q_offset + q_limit
-  except ApiException as e:
+  except Exception as e:
     log.error(str(e) + ':' + host_code)
 
 def cleanup_products(host_code, version_id):
-  product_api = stylelens_product.ProductApi()
+  global product_api
   try:
     res = product_api.delete_products_by_hostcode_and_version_id(host_code, version_id,
                                                               except_version=True)
     log.debug(res)
-  except ApiException as e:
+  except Exception as e:
     log.error(e)
 
 def push_product_to_queue(product):
-  rconn.lpush(REDIS_PRODUCT_IMAGE_PROCESS_QUEUE, pickle.dumps(product.to_dict()))
+  rconn.lpush(REDIS_PRODUCT_IMAGE_PROCESS_QUEUE, pickle.dumps(product))
 
 def spawn_classifier(uuid):
 
@@ -140,11 +141,14 @@ def spawn_classifier(uuid):
   pool.addContainerEnv(container, 'DB_IMAGE_PASSWORD', DB_IMAGE_PASSWORD)
   pool.addContainerEnv(container, 'DB_IMAGE_NAME', DB_IMAGE_NAME)
   pool.setContainerImage(container, 'bluelens/bl-object-classifier:' + RELEASE_MODE)
+  pool.setContainerImagePullPolicy(container, 'Always')
   pool.addContainer(container)
   pool.setRestartPolicy('Never')
   pool.spawn()
 
 def dispatch_query_job(rconn):
+  global product_api
+  product_api = Products()
   while True:
     key, value = rconn.blpop([REDIS_HOST_CLASSIFY_QUEUE])
     query(value.decode('utf-8'))
@@ -158,6 +162,9 @@ def dispatch_classifier(rconn):
       spawn_classifier(str(uuid.uuid4()))
       count = count + 1
     time.sleep(60 + count * 10)
+    # if len > 0:
+    #   spawn_classifier(str(uuid.uuid4()))
+    # time.sleep(300)
 
 if __name__ == '__main__':
   try:
