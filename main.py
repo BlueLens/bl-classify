@@ -16,6 +16,7 @@ REDIS_PRODUCT_QUERY_QUEUE = 'bl:product:query:queue'
 REDIS_PRODUCT_CLASSIFY_QUEUE = 'bl:product:classify:queue'
 REDIS_CRAWL_VERSION = 'bl:crawl:version'
 REDIS_CRAWL_VERSION_LATEST = 'latest'
+REDIS_PRODUCT_IMAGE_PROCESS_QUEUE = 'bl:product:image:process:queue'
 
 REDIS_SERVER = os.environ['REDIS_SERVER']
 REDIS_PASSWORD = os.environ['REDIS_PASSWORD']
@@ -27,6 +28,12 @@ DB_OBJECT_PORT = os.environ['DB_OBJECT_PORT']
 DB_OBJECT_NAME = os.environ['DB_OBJECT_NAME']
 DB_OBJECT_USER = os.environ['DB_OBJECT_USER']
 DB_OBJECT_PASSWORD = os.environ['DB_OBJECT_PASSWORD']
+
+DB_PRODUCT_HOST = os.environ['DB_PRODUCT_HOST']
+DB_PRODUCT_PORT = os.environ['DB_PRODUCT_PORT']
+DB_PRODUCT_USER = os.environ['DB_PRODUCT_USER']
+DB_PRODUCT_PASSWORD = os.environ['DB_PRODUCT_PASSWORD']
+DB_PRODUCT_NAME = os.environ['DB_PRODUCT_NAME']
 
 DB_IMAGE_HOST = os.environ['DB_IMAGE_HOST']
 DB_IMAGE_PORT = os.environ['DB_IMAGE_PORT']
@@ -73,6 +80,11 @@ def spawn_classifier(uuid):
   pool.addContainerEnv(container, 'RELEASE_MODE', RELEASE_MODE)
   pool.addContainerEnv(container, 'OD_HOST', OD_HOST)
   pool.addContainerEnv(container, 'OD_PORT', OD_PORT)
+  pool.addContainerEnv(container, 'DB_PRODUCT_HOST', DB_PRODUCT_HOST)
+  pool.addContainerEnv(container, 'DB_PRODUCT_PORT', DB_PRODUCT_PORT)
+  pool.addContainerEnv(container, 'DB_PRODUCT_USER', DB_PRODUCT_USER)
+  pool.addContainerEnv(container, 'DB_PRODUCT_PASSWORD', DB_PRODUCT_PASSWORD)
+  pool.addContainerEnv(container, 'DB_PRODUCT_NAME', DB_PRODUCT_NAME)
   pool.addContainerEnv(container, 'DB_OBJECT_HOST', DB_OBJECT_HOST)
   pool.addContainerEnv(container, 'DB_OBJECT_PORT', DB_OBJECT_PORT)
   pool.addContainerEnv(container, 'DB_OBJECT_USER', DB_OBJECT_USER)
@@ -91,15 +103,16 @@ def spawn_classifier(uuid):
 
 def get_latest_crawl_version():
   value = rconn.hget(REDIS_CRAWL_VERSION, REDIS_CRAWL_VERSION_LATEST)
-  version_id = value.decode("utf-8")
-  return version_id
-
+  if value is not None:
+    version_id = value.decode("utf-8")
+    return version_id
+  else:
+    return None
 
 def dispatch_classifier():
   product_api = Products()
   offset = 0
   limit = 500
-  version_id = get_latest_crawl_version()
 
   try:
     while True:
@@ -109,12 +122,16 @@ def dispatch_classifier():
                                                    offset=offset,
                                                    limit=limit)
 
+      hash = {}
       for product in res:
-        rconn.lpush(REDIS_PRODUCT_CLASSIFY_QUEUE, pickle.dumps(product))
+        hash[str(product['_id'])] = product
 
-      if limit > len(res):
-        offset = 0
-        time.sleep(120)
+      rconn.hmset(REDIS_PRODUCT_CLASSIFY_QUEUE, pickle.dumps(hash))
+
+      log.debug("Got " + str(len(res)) + 'products')
+
+      if len(res) == 0:
+        break
       else:
         offset = offset + limit
         spawn_classifier(str(uuid.uuid4()))
@@ -125,6 +142,9 @@ def dispatch_classifier():
 
 if __name__ == '__main__':
   try:
-    dispatch_classifier()
+    while True:
+      if rconn.llen(REDIS_PRODUCT_IMAGE_PROCESS_QUEUE) > 0:
+        version_id = get_latest_crawl_version()
+        dispatch_classifier()
   except Exception as e:
     log.error(str(e))
