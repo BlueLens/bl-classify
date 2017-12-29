@@ -12,8 +12,8 @@ from stylelens_product.products import Products
 from bluelens_log import Logging
 
 
-REDIS_PRODUCT_QUERY_QUEUE = 'bl:product:query:queue'
-REDIS_PRODUCT_CLASSIFY_QUEUE = 'bl:product:classify:queue'
+# REDIS_PRODUCT_CLASSIFY_QUEUE = 'bl:product:classify:queue'
+REDIS_PRODUCT_CLASSIFY_QUEUE = 'bl_product_classify_queue'
 REDIS_CRAWL_VERSION = 'bl:crawl:version'
 REDIS_CRAWL_VERSION_LATEST = 'latest'
 REDIS_PRODUCT_IMAGE_PROCESS_QUEUE = 'bl:product:image:process:queue'
@@ -126,7 +126,7 @@ def dispatch_classifier():
       for product in res:
         hash[str(product['_id'])] = product
 
-      rconn.hmset(REDIS_PRODUCT_CLASSIFY_QUEUE, pickle.dumps(hash))
+      rconn.hmset(REDIS_PRODUCT_CLASSIFY_QUEUE, hash)
 
       log.debug("Got " + str(len(res)) + 'products')
 
