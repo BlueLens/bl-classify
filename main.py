@@ -6,11 +6,14 @@ import pickle
 
 import redis
 import time
+from multiprocessing import Process
 from bluelens_spawning_pool import spawning_pool
 from stylelens_product.products import Products
 
+
 from bluelens_log import Logging
 
+INTERVAL_TIME = 60 * 10
 
 # REDIS_PRODUCT_CLASSIFY_QUEUE = 'bl:product:classify:queue'
 REDIS_PRODUCT_CLASSIFY_QUEUE = 'bl_product_classify_queue'
@@ -44,15 +47,12 @@ DB_IMAGE_PASSWORD = os.environ['DB_IMAGE_PASSWORD']
 AWS_ACCESS_KEY = os.environ['AWS_ACCESS_KEY']
 AWS_SECRET_ACCESS_KEY = os.environ['AWS_SECRET_ACCESS_KEY']
 
-rconn = redis.StrictRedis(REDIS_SERVER, port=6379, password=REDIS_PASSWORD)
+rconn = redis.StrictRedis(REDIS_SERVER, decode_responses=True, port=6379, password=REDIS_PASSWORD)
 options = {
   'REDIS_SERVER': REDIS_SERVER,
   'REDIS_PASSWORD': REDIS_PASSWORD
 }
 log = Logging(options, tag='bl-classify')
-
-product_api = None
-
 
 def spawn_classifier(uuid):
 
@@ -104,47 +104,80 @@ def spawn_classifier(uuid):
 def get_latest_crawl_version():
   value = rconn.hget(REDIS_CRAWL_VERSION, REDIS_CRAWL_VERSION_LATEST)
   if value is not None:
-    version_id = value.decode("utf-8")
+    version_id = value
     return version_id
   else:
     return None
 
-def dispatch_classifier():
+def prepare_products_to_classfiy(rconn):
   product_api = Products()
   offset = 0
-  limit = 500
+  limit = 100
 
   try:
     while True:
+      version_id = get_latest_crawl_version()
+      if version_id is None:
+        time.sleep(60*30)
+        continue
       res = product_api.get_products_by_version_id(version_id=version_id,
                                                    is_processed=True,
                                                    is_classified=False,
                                                    offset=offset,
                                                    limit=limit)
-
-      hash = {}
-      for product in res:
-        hash[str(product['_id'])] = product
-
-      rconn.hmset(REDIS_PRODUCT_CLASSIFY_QUEUE, hash)
-
-      log.debug("Got " + str(len(res)) + 'products')
-
       if len(res) == 0:
-        break
+        offset = 0
+        time.sleep(1800)
       else:
+        hash = {}
+        for product in res:
+          hash[str(product['_id'])] = pickle.dumps(product)
+          rconn.hmset(REDIS_PRODUCT_CLASSIFY_QUEUE, hash)
+
+        log.debug("Got " + str(len(res)) + 'products')
+
         offset = offset + limit
-        spawn_classifier(str(uuid.uuid4()))
-        time.sleep(60)
+
+      time.sleep(60)
 
   except Exception as e:
     log.error(str(e))
+
+def dispatch_classifier(rconn):
+  product_api = Products()
+  while True:
+    version_id = get_latest_crawl_version()
+    if version_id is None:
+      time.sleep(600)
+      continue
+
+    CLASSIFY_PER_POD = 1000
+
+    size = get_size_of_not_classified_products(product_api, version_id)
+
+    if size > 0 and size < 500:
+      for i in range(10):
+        spawn_classifier(str(uuid.uuid4()))
+      time.sleep(60*60)
+
+    if size >= 500 and size < 1000:
+      for i in range(10):
+        spawn_classifier(str(uuid.uuid4()))
+
+      time.sleep(60*60*3)
+    elif size >= 10000:
+      for i in range(10):
+        spawn_classifier(str(uuid.uuid4()))
+      time.sleep(60*60*5)
+
+def get_size_of_not_classified_products(product_api, version_id):
+  try:
+    size = product_api.get_size_not_classified(version_id)
+  except Exception as e:
+    log.error(str(e))
+  return size
 
 if __name__ == '__main__':
-  try:
-    while True:
-      if rconn.llen(REDIS_PRODUCT_IMAGE_PROCESS_QUEUE) > 0:
-        version_id = get_latest_crawl_version()
-        dispatch_classifier()
-  except Exception as e:
-    log.error(str(e))
+  log.info("start bl-classify:1")
+  Process(target=dispatch_classifier, args=(rconn,)).start()
+  Process(target=prepare_products_to_classfiy, args=(rconn,)).start()
