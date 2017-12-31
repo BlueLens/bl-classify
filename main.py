@@ -132,7 +132,8 @@ def prepare_products_to_classfiy(rconn):
         hash = {}
         for product in res:
           hash[str(product['_id'])] = pickle.dumps(product)
-          rconn.hmset(REDIS_PRODUCT_CLASSIFY_QUEUE, hash)
+
+        rconn.hmset(REDIS_PRODUCT_CLASSIFY_QUEUE, hash)
 
         log.debug("Got " + str(len(res)) + 'products')
 
