@@ -9,6 +9,7 @@ import time
 from multiprocessing import Process
 from bluelens_spawning_pool import spawning_pool
 from stylelens_product.products import Products
+from stylelens_product.crawls import Crawls
 
 
 from bluelens_log import Logging
@@ -53,6 +54,8 @@ options = {
   'REDIS_PASSWORD': REDIS_PASSWORD
 }
 log = Logging(options, tag='bl-classify')
+
+product_api = None
 
 def spawn_classifier(uuid):
 
@@ -110,7 +113,7 @@ def get_latest_crawl_version():
     return None
 
 def prepare_products_to_classfiy(rconn):
-  product_api = Products()
+  global product_api
   offset = 0
   limit = 100
 
@@ -125,60 +128,83 @@ def prepare_products_to_classfiy(rconn):
                                                    is_classified=False,
                                                    offset=offset,
                                                    limit=limit)
-      if len(res) == 0:
-        offset = 0
-        time.sleep(1800)
+      if limit > len(res):
+        break
       else:
-        hash = {}
         for product in res:
-          hash[str(product['_id'])] = pickle.dumps(product)
-
-        rconn.hmset(REDIS_PRODUCT_CLASSIFY_QUEUE, hash)
+          rconn.lpush(REDIS_PRODUCT_CLASSIFY_QUEUE, pickle.dumps(product))
 
         log.debug("Got " + str(len(res)) + 'products')
 
         offset = offset + limit
 
-      time.sleep(60)
-
   except Exception as e:
     log.error(str(e))
 
-def dispatch_classifier(rconn):
+def dispatch_classifier(rconn, version_id):
+  global product_api
+  CLASSIFY_PER_POD = 1000
+
+  size = rconn.llen(REDIS_PRODUCT_CLASSIFY_QUEUE)
+  # size = get_size_of_not_classified_products(product_api, version_id)
+
+  if size < 1000:
+    for i in range(10):
+      spawn_classifier(str(uuid.uuid4()))
+
+  if size >= 1000 and size < 10000:
+    for i in range(100):
+      spawn_classifier(str(uuid.uuid4()))
+
+  elif size >= 10000:
+    for i in range(300):
+      spawn_classifier(str(uuid.uuid4()))
+
+# def get_size_of_not_classified_products(product_api, version_id):
+#   try:
+#     size = product_api.get_size_not_classified(version_id)
+#   except Exception as e:
+#     log.error(str(e))
+#   return size
+
+def check_condition_to_start(version_id):
+  global product_api
+
   product_api = Products()
-  while True:
-    version_id = get_latest_crawl_version()
-    if version_id is None:
-      time.sleep(600)
-      continue
+  crawl_api = Crawls()
 
-    CLASSIFY_PER_POD = 1000
-
-    size = get_size_of_not_classified_products(product_api, version_id)
-
-    if size > 0 and size < 500:
-      for i in range(10):
-        spawn_classifier(str(uuid.uuid4()))
-      time.sleep(60*60)
-
-    if size >= 500 and size < 1000:
-      for i in range(10):
-        spawn_classifier(str(uuid.uuid4()))
-
-      time.sleep(60*60*3)
-    elif size >= 10000:
-      for i in range(10):
-        spawn_classifier(str(uuid.uuid4()))
-      time.sleep(60*60*5)
-
-def get_size_of_not_classified_products(product_api, version_id):
   try:
-    size = product_api.get_size_not_classified(version_id)
+    # Check Crawling process is done
+    total_crawl_size = crawl_api.get_size_crawls(version_id)
+    crawled_size = crawl_api.get_size_crawls(version_id, status='done')
+    if total_crawl_size != crawled_size:
+      return False
+
+    # Check Image processing process is done
+    total_product_size = product_api.get_size_products(version_id)
+    processed_size = product_api.get_size_products(version_id, is_processed=True)
+    if total_product_size != processed_size:
+      return False
+
   except Exception as e:
     log.error(str(e))
-  return size
+
+  return True
+
+def start(rconn):
+  while True:
+    version_id = get_latest_crawl_version(rconn)
+    if version_id is not None:
+      ok = check_condition_to_start(version_id)
+      if ok is True:
+        prepare_products_to_classfiy(rconn)
+        dispatch_classifier(version_id)
+      else:
+        time.sleep(60*10)
 
 if __name__ == '__main__':
   log.info("start bl-classify:1")
-  Process(target=dispatch_classifier, args=(rconn,)).start()
-  Process(target=prepare_products_to_classfiy, args=(rconn,)).start()
+  try:
+    Process(target=start, args=(rconn,)).start()
+  except Exception as e:
+    log.error(str(e))
