@@ -33,6 +33,8 @@ DB_OBJECT_NAME = os.environ['DB_OBJECT_NAME']
 DB_OBJECT_USER = os.environ['DB_OBJECT_USER']
 DB_OBJECT_PASSWORD = os.environ['DB_OBJECT_PASSWORD']
 
+MAX_PROCESS_NUM = int(os.environ['MAX_PROCESS_NUM'])
+
 DB_PRODUCT_HOST = os.environ['DB_PRODUCT_HOST']
 DB_PRODUCT_PORT = os.environ['DB_PRODUCT_PORT']
 DB_PRODUCT_USER = os.environ['DB_PRODUCT_USER']
@@ -80,6 +82,7 @@ def spawn_classifier(uuid):
   pool.addContainerEnv(container, 'REDIS_SERVER', REDIS_SERVER)
   pool.addContainerEnv(container, 'REDIS_PASSWORD', REDIS_PASSWORD)
   pool.addContainerEnv(container, 'SPAWN_ID', uuid)
+  pool.addContainerEnv(container, 'MAX_PROCESS_NUM', str(MAX_PROCESS_NUM))
   pool.addContainerEnv(container, 'RELEASE_MODE', RELEASE_MODE)
   pool.addContainerEnv(container, 'OD_HOST', OD_HOST)
   pool.addContainerEnv(container, 'OD_PORT', OD_PORT)
@@ -104,7 +107,7 @@ def spawn_classifier(uuid):
   pool.setRestartPolicy('Never')
   pool.spawn()
 
-def get_latest_crawl_version():
+def get_latest_crawl_version(rconn):
   value = rconn.hget(REDIS_CRAWL_VERSION, REDIS_CRAWL_VERSION_LATEST)
   if value is not None:
     version_id = value
@@ -112,53 +115,49 @@ def get_latest_crawl_version():
   else:
     return None
 
-def prepare_products_to_classfiy(rconn):
+def prepare_products_to_classfiy(rconn, version_id):
   global product_api
   offset = 0
   limit = 100
 
   try:
     while True:
-      version_id = get_latest_crawl_version()
-      if version_id is None:
-        time.sleep(60*30)
-        continue
       res = product_api.get_products_by_version_id(version_id=version_id,
                                                    is_processed=True,
                                                    is_classified=False,
                                                    offset=offset,
                                                    limit=limit)
+      log.debug("Got " + str(len(res)) + ' products')
+      for product in res:
+        rconn.lpush(REDIS_PRODUCT_CLASSIFY_QUEUE, pickle.dumps(product))
+
       if limit > len(res):
         break
       else:
-        for product in res:
-          rconn.lpush(REDIS_PRODUCT_CLASSIFY_QUEUE, pickle.dumps(product))
-
-        log.debug("Got " + str(len(res)) + 'products')
-
         offset = offset + limit
 
   except Exception as e:
     log.error(str(e))
 
-def dispatch_classifier(rconn, version_id):
+def dispatch(rconn, version_id):
   global product_api
-  CLASSIFY_PER_POD = 1000
 
   size = rconn.llen(REDIS_PRODUCT_CLASSIFY_QUEUE)
-  # size = get_size_of_not_classified_products(product_api, version_id)
 
-  if size < 1000:
+  if size < MAX_PROCESS_NUM:
     for i in range(10):
       spawn_classifier(str(uuid.uuid4()))
+    time.sleep(60*60*2)
 
-  if size >= 1000 and size < 10000:
-    for i in range(100):
-      spawn_classifier(str(uuid.uuid4()))
-
-  elif size >= 10000:
+  if size >= MAX_PROCESS_NUM and size < MAX_PROCESS_NUM*10:
     for i in range(300):
       spawn_classifier(str(uuid.uuid4()))
+    time.sleep(60*60*5)
+
+  elif size >= MAX_PROCESS_NUM*100:
+    for i in range(500):
+      spawn_classifier(str(uuid.uuid4()))
+    time.sleep(60*60*10)
 
 # def get_size_of_not_classified_products(product_api, version_id):
 #   try:
@@ -186,6 +185,16 @@ def check_condition_to_start(version_id):
     if total_product_size != processed_size:
       return False
 
+    # Check Classifying processing process is done
+    classified_size = product_api.get_size_products(version_id, is_classified=True)
+    if total_product_size == classified_size:
+      return False
+
+    # Check Object classifying process is done
+    queue_size = rconn.llen(REDIS_PRODUCT_CLASSIFY_QUEUE)
+    if queue_size != 0:
+      return False
+
   except Exception as e:
     log.error(str(e))
 
@@ -197,14 +206,14 @@ def start(rconn):
     if version_id is not None:
       ok = check_condition_to_start(version_id)
       if ok is True:
-        prepare_products_to_classfiy(rconn)
-        dispatch_classifier(version_id)
-      else:
-        time.sleep(60*10)
+        prepare_products_to_classfiy(rconn, version_id)
+        dispatch(rconn, version_id)
+
+    time.sleep(60*10)
 
 if __name__ == '__main__':
-  log.info("start bl-classify:1")
   try:
+    log.info("start bl-classify:1")
     Process(target=start, args=(rconn,)).start()
   except Exception as e:
     log.error(str(e))
