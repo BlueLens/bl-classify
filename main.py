@@ -33,6 +33,12 @@ DB_OBJECT_NAME = os.environ['DB_OBJECT_NAME']
 DB_OBJECT_USER = os.environ['DB_OBJECT_USER']
 DB_OBJECT_PASSWORD = os.environ['DB_OBJECT_PASSWORD']
 
+DB_OBJECT_FEATURE_HOST = os.environ['DB_OBJECT_FEATURE_HOST']
+DB_OBJECT_FEATURE_PORT = os.environ['DB_OBJECT_FEATURE_PORT']
+DB_OBJECT_FEATURE_NAME = os.environ['DB_OBJECT_FEATURE_NAME']
+DB_OBJECT_FEATURE_USER = os.environ['DB_OBJECT_FEATURE_USER']
+DB_OBJECT_FEATURE_PASSWORD = os.environ['DB_OBJECT_FEATURE_PASSWORD']
+
 MAX_PROCESS_NUM = int(os.environ['MAX_PROCESS_NUM'])
 
 DB_PRODUCT_HOST = os.environ['DB_PRODUCT_HOST']
@@ -96,6 +102,11 @@ def spawn_classifier(uuid):
   pool.addContainerEnv(container, 'DB_OBJECT_USER', DB_OBJECT_USER)
   pool.addContainerEnv(container, 'DB_OBJECT_PASSWORD', DB_OBJECT_PASSWORD)
   pool.addContainerEnv(container, 'DB_OBJECT_NAME', DB_OBJECT_NAME)
+  pool.addContainerEnv(container, 'DB_OBJECT_FEATURE_HOST', DB_OBJECT_FEATURE_HOST)
+  pool.addContainerEnv(container, 'DB_OBJECT_FEATURE_PORT', DB_OBJECT_FEATURE_PORT)
+  pool.addContainerEnv(container, 'DB_OBJECT_FEATURE_USER', DB_OBJECT_FEATURE_USER)
+  pool.addContainerEnv(container, 'DB_OBJECT_FEATURE_PASSWORD', DB_OBJECT_FEATURE_PASSWORD)
+  pool.addContainerEnv(container, 'DB_OBJECT_FEATURE_NAME', DB_OBJECT_FEATURE_NAME)
   pool.addContainerEnv(container, 'DB_IMAGE_HOST', DB_IMAGE_HOST)
   pool.addContainerEnv(container, 'DB_IMAGE_PORT', DB_IMAGE_PORT)
   pool.addContainerEnv(container, 'DB_IMAGE_USER', DB_IMAGE_USER)
@@ -120,6 +131,8 @@ def prepare_products_to_classfiy(rconn, version_id):
   offset = 0
   limit = 100
 
+  clear_queue(rconn)
+  remove_prev_pods()
   try:
     while True:
       res = product_api.get_products_by_version_id(version_id=version_id,
@@ -139,7 +152,24 @@ def prepare_products_to_classfiy(rconn, version_id):
   except Exception as e:
     log.error(str(e))
 
+def remove_prev_pods():
+  pool = spawning_pool.SpawningPool()
+  pool.setServerUrl(REDIS_SERVER)
+  pool.setServerPassword(REDIS_PASSWORD)
+  pool.setMetadataNamespace(RELEASE_MODE)
+  data = {}
+  data['key'] = 'group'
+  data['value'] = 'bl-object-classifier'
+  pool.delete(data)
+  data['value'] = 'bl-image-processor'
+  pool.delete(data)
+  time.sleep(60)
+
+def clear_queue(rconn):
+  rconn.delete(REDIS_PRODUCT_CLASSIFY_QUEUE)
+
 def dispatch(rconn, version_id):
+  log.info('dispatch')
   global product_api
 
   size = rconn.llen(REDIS_PRODUCT_CLASSIFY_QUEUE)
@@ -147,17 +177,17 @@ def dispatch(rconn, version_id):
   if size < MAX_PROCESS_NUM:
     for i in range(10):
       spawn_classifier(str(uuid.uuid4()))
-    time.sleep(60*60*2)
+    # time.sleep(60*60*2)
 
   if size >= MAX_PROCESS_NUM and size < MAX_PROCESS_NUM*10:
-    for i in range(300):
+    for i in range(200):
       spawn_classifier(str(uuid.uuid4()))
-    time.sleep(60*60*5)
+    # time.sleep(60*60*5)
 
   elif size >= MAX_PROCESS_NUM*100:
-    for i in range(500):
+    for i in range(200):
       spawn_classifier(str(uuid.uuid4()))
-    time.sleep(60*60*10)
+    # time.sleep(60*60*10)
 
 # def get_size_of_not_classified_products(product_api, version_id):
 #   try:
@@ -204,7 +234,9 @@ def start(rconn):
   while True:
     version_id = get_latest_crawl_version(rconn)
     if version_id is not None:
+      log.info("check_condition_to_start")
       ok = check_condition_to_start(version_id)
+      log.info("check_condition_to_start: " + str(ok))
       if ok is True:
         prepare_products_to_classfiy(rconn, version_id)
         dispatch(rconn, version_id)
@@ -213,7 +245,7 @@ def start(rconn):
 
 if __name__ == '__main__':
   try:
-    log.info("start bl-classify:1")
+    log.info("start bl-classify:2")
     Process(target=start, args=(rconn,)).start()
   except Exception as e:
     log.error(str(e))
