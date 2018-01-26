@@ -137,6 +137,7 @@ def prepare_products_to_classfiy(rconn, version_id):
     while True:
       res = product_api.get_products_by_version_id(version_id=version_id,
                                                    is_processed=True,
+                                                   is_available=True,
                                                    is_classified=False,
                                                    offset=offset,
                                                    limit=limit)
@@ -209,10 +210,13 @@ def check_condition_to_start(version_id):
     if total_crawl_size != crawled_size:
       return False
 
-    # Check Image processing process is done
+    # Check if all images are processed
     total_product_size = product_api.get_size_products(version_id)
-    processed_size = product_api.get_size_products(version_id, is_processed=True)
-    if total_product_size != processed_size:
+    available_product_size = product_api.get_size_products(version_id, is_available=True)
+    unavailable_product_size = product_api.get_size_products(version_id, is_available=False)
+    # processed_size = product_api.get_size_products(version_id, is_processed=True)
+
+    if (available_product_size + unavailable_product_size) != total_product_size:
       return False
 
     # Check Classifying processing process is done
@@ -245,7 +249,7 @@ def start(rconn):
 
 if __name__ == '__main__':
   try:
-    log.info("start bl-classify:2")
+    log.info("start bl-classify:1")
     Process(target=start, args=(rconn,)).start()
   except Exception as e:
     log.error(str(e))
