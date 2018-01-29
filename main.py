@@ -204,6 +204,11 @@ def check_condition_to_start(version_id):
   crawl_api = Crawls()
 
   try:
+    # Check Object classifying process is done
+    queue_size = rconn.llen(REDIS_PRODUCT_CLASSIFY_QUEUE)
+    if queue_size != 0:
+      return False
+
     # Check Crawling process is done
     total_crawl_size = crawl_api.get_size_crawls(version_id)
     crawled_size = crawl_api.get_size_crawls(version_id, status='done')
@@ -221,13 +226,10 @@ def check_condition_to_start(version_id):
 
     # Check Classifying processing process is done
     classified_size = product_api.get_size_products(version_id, is_classified=True)
-    if total_product_size == classified_size:
+    not_classified_size = product_api.get_size_products(version_id, is_classified=False)
+    if (classified_size + not_classified_size) == total_product_size:
       return False
 
-    # Check Object classifying process is done
-    queue_size = rconn.llen(REDIS_PRODUCT_CLASSIFY_QUEUE)
-    if queue_size != 0:
-      return False
 
   except Exception as e:
     log.error(str(e))
@@ -249,7 +251,7 @@ def start(rconn):
 
 if __name__ == '__main__':
   try:
-    log.info("start bl-classify:1")
+    log.info("start bl-classify:2")
     Process(target=start, args=(rconn,)).start()
   except Exception as e:
     log.error(str(e))
