@@ -10,6 +10,9 @@ from multiprocessing import Process
 from bluelens_spawning_pool import spawning_pool
 from stylelens_product.products import Products
 from stylelens_product.crawls import Crawls
+from stylelens_object.objects import Objects
+from stylelens_object.features import Features
+from stylelens_image.images import Images
 
 
 from bluelens_log import Logging
@@ -118,6 +121,42 @@ def spawn_classifier(uuid):
   pool.setRestartPolicy('Never')
   pool.spawn()
 
+def clear_dbs(version_id):
+  global product_api
+
+  try:
+    res = product_api.reset_product_as_not_object_classified(version_id=version_id)
+  except Exception as e:
+    log.error(str(e))
+
+  object_api = Objects()
+  try:
+    res = object_api.delete_all()
+  except Exception as e:
+    log.error(str(e))
+
+  try:
+    res = object_api.reset_index(version_id)
+  except Exception as e:
+    log.error(str(e))
+
+  try:
+    res = object_api.reset_image_index(version_id)
+  except Exception as e:
+    log.error(str(e))
+
+  feature_api = Features()
+  try:
+    res = feature_api.delete_all()
+  except Exception as e:
+    log.error(str(e))
+
+  image_api = Images()
+  try:
+    res = image_api.delete_all()
+  except Exception as e:
+    log.error(str(e))
+
 def get_latest_crawl_version(rconn):
   value = rconn.hget(REDIS_CRAWL_VERSION, REDIS_CRAWL_VERSION_LATEST)
   if value is not None:
@@ -131,6 +170,7 @@ def prepare_products_to_classfiy(rconn, version_id):
   offset = 0
   limit = 100
 
+  clear_dbs(version_id)
   clear_queue(rconn)
   remove_prev_pods()
   try:
@@ -251,7 +291,7 @@ def start(rconn):
 
 if __name__ == '__main__':
   try:
-    log.info("start bl-classify:2")
+    log.info("start bl-classify:3")
     Process(target=start, args=(rconn,)).start()
   except Exception as e:
     log.error(str(e))
