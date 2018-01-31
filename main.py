@@ -170,7 +170,7 @@ def prepare_products_to_classfiy(rconn, version_id):
   offset = 0
   limit = 100
 
-  clear_dbs(version_id)
+  # clear_dbs(version_id)
   clear_queue(rconn)
   remove_prev_pods()
   try:
@@ -199,6 +199,7 @@ def remove_prev_pods():
   pool.setServerPassword(REDIS_PASSWORD)
   pool.setMetadataNamespace(RELEASE_MODE)
   data = {}
+  data['namespace'] = RELEASE_MODE
   data['key'] = 'group'
   data['value'] = 'bl-object-classifier'
   pool.delete(data)
@@ -221,7 +222,7 @@ def dispatch(rconn, version_id):
     # time.sleep(60*60*2)
 
   if size >= MAX_PROCESS_NUM and size < MAX_PROCESS_NUM*10:
-    for i in range(200):
+    for i in range(100):
       spawn_classifier(str(uuid.uuid4()))
     # time.sleep(60*60*5)
 
@@ -291,7 +292,7 @@ def start(rconn):
 
 if __name__ == '__main__':
   try:
-    log.info("start bl-classify:3")
+    log.info("start bl-classify:1")
     Process(target=start, args=(rconn,)).start()
   except Exception as e:
     log.error(str(e))
